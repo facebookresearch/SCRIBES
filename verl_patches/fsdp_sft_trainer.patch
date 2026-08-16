@@ -1,0 +1,36 @@
+diff --git a/verl/trainer/fsdp_sft_trainer.py b/verl/trainer/fsdp_sft_trainer.py
+index 8b8cc4a..83d1f67 100644
+--- a/verl/trainer/fsdp_sft_trainer.py
++++ b/verl/trainer/fsdp_sft_trainer.py
+@@ -169,7 +169,7 @@ class FSDPSFTTrainer:
+             print(f"Using FSDP rank {rank} and size {world_size} for data distribution")
+ 
+         self.train_sampler = DistributedSampler(
+-            self.train_dataset, shuffle=True, num_replicas=world_size, rank=rank, drop_last=True
++            self.train_dataset, shuffle=True, num_replicas=world_size, rank=rank, drop_last=False
+         )
+         self.train_dataloader = StatefulDataLoader(
+             dataset=self.train_dataset,
+@@ -177,11 +177,11 @@ class FSDPSFTTrainer:
+             sampler=self.train_sampler,
+             num_workers=8,
+             pin_memory=True,
+-            drop_last=True,
++            drop_last=False,
+         )
+ 
+         self.val_sampler = DistributedSampler(
+-            self.val_dataset, shuffle=False, num_replicas=world_size, rank=rank, drop_last=True
++            self.val_dataset, shuffle=False, num_replicas=world_size, rank=rank, drop_last=False
+         )
+         self.val_dataloader = StatefulDataLoader(
+             dataset=self.val_dataset,
+@@ -189,7 +189,7 @@ class FSDPSFTTrainer:
+             sampler=self.val_sampler,
+             num_workers=8,
+             pin_memory=True,
+-            drop_last=True,
++            drop_last=False,
+         )
+ 
+     def _build_model_optimizer(self):

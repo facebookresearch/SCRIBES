@@ -1,0 +1,74 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# GRPO training recipe for triple extraction. Composes on top of verl's stock
+# ppo_trainer.yaml; run from the root of a verl checkout so the relative
+# hydra.searchpath below resolves.
+
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: false
+
+data:
+  train_batch_size: 32
+  max_prompt_length: 28672
+  max_response_length: 4096
+  filter_overlong_prompts: true
+  truncation: error
+
+actor_rollout_ref:
+  model:
+    use_remove_padding: true
+    enable_gradient_checkpointing: true
+  actor:
+    optim:
+      lr: 1.0e-6
+    ppo_mini_batch_size: 32
+    ppo_micro_batch_size_per_gpu: 1
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
+    entropy_coeff: 0
+    fsdp_config:
+      param_offload: false
+      optimizer_offload: false
+    ulysses_sequence_parallel_size: 2
+  rollout:
+    log_prob_micro_batch_size_per_gpu: 4
+    tensor_model_parallel_size: 8
+    name: vllm
+    gpu_memory_utilization: 0.4
+    max_num_batched_tokens: 32768
+    n: 8
+  ref:
+    log_prob_micro_batch_size_per_gpu: 4
+    fsdp_config:
+      param_offload: true
+
+reward_model:
+  reward_manager: prime
+
+custom_reward_function:
+  name: reward_func
+  # path: set at launch time via the run script, e.g.
+  #   custom_reward_function.path=$SCRIPT_DIR/reward_score_group_generalization_avg.py
+
+trainer:
+  critic_warmup: 0
+  logger: ["console", "wandb"]
+  project_name: triple_extraction_group_generalization
+  n_gpus_per_node: 8
+  nnodes: 1
+  save_freq: 20
+  test_freq: 5
+  log_val_generations: 10
+  resume_mode: auto
+  total_epochs: 50

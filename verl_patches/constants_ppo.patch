@@ -1,0 +1,28 @@
+diff --git a/verl/trainer/constants_ppo.py b/verl/trainer/constants_ppo.py
+index 1181133..6137e7e 100644
+--- a/verl/trainer/constants_ppo.py
++++ b/verl/trainer/constants_ppo.py
+@@ -31,7 +31,23 @@ def get_ppo_ray_runtime_env():
+     To avoid repeat of some environment variables that are already set.
+     """
+     runtime_env = {"env_vars": PPO_RAY_RUNTIME_ENV["env_vars"].copy()}
++
++    # Force-propagate critical VERL controls into Ray workers/drivers if set on the parent process.
++    # These affect control flow (e.g., DP auto-padding) and must be visible inside Ray processes.
++    pass_through_env_keys = [
++        "VERL_AUTO_PADDING",
++    ]
++    for k in pass_through_env_keys:
++        v = os.environ.get(k, None)
++        if v is not None:
++            runtime_env["env_vars"][k] = v
++
++    # For predefined keys, skip duplicating those that are already present in the parent env.
++    # Do not remove pass-through keys so they are forwarded to Ray even if present in the parent env.
+     for key in list(runtime_env["env_vars"].keys()):
++        if key in pass_through_env_keys:
++            continue
+         if os.environ.get(key) is not None:
+             runtime_env["env_vars"].pop(key, None)
++
+     return runtime_env

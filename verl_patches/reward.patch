@@ -1,0 +1,42 @@
+diff --git a/verl/trainer/ppo/reward.py b/verl/trainer/ppo/reward.py
+index 6362f78..4c84f59 100644
+--- a/verl/trainer/ppo/reward.py
++++ b/verl/trainer/ppo/reward.py
+@@ -14,6 +14,7 @@
+ 
+ import multiprocessing
+ import os
++import hashlib
+ from functools import partial
+ 
+ import ray
+@@ -61,13 +62,22 @@ def get_custom_reward_fn(config):
+     if not os.path.exists(file_path):
+         raise FileNotFoundError(f"Reward function file '{file_path}' not found.")
+ 
+-    spec = importlib.util.spec_from_file_location("custom_module", file_path)
+-    module = importlib.util.module_from_spec(spec)
+-    try:
+-        sys.modules["custom_module"] = module
+-        spec.loader.exec_module(module)
+-    except Exception as e:
+-        raise RuntimeError(f"Error loading module from '{file_path}': {e}") from e
++    # Use a stable, path-specific module key so the same reward file maps to the
++    # *same* module object across multiple calls.  This prevents the situation
++    # where cloudpickle sees two distinct function objects with identical
++    # qualified names and raises a pickling error.
++    module_name = f"custom_reward_{hashlib.md5(file_path.encode()).hexdigest()}"
++
++    if module_name in sys.modules:
++        module = sys.modules[module_name]
++    else:
++        spec = importlib.util.spec_from_file_location(module_name, file_path)
++        module = importlib.util.module_from_spec(spec)
++        try:
++            sys.modules[module_name] = module
++            spec.loader.exec_module(module)
++        except Exception as e:
++            raise RuntimeError(f"Error loading module from '{file_path}': {e}") from e
+ 
+     function_name = reward_fn_config.get("name")
+     if not hasattr(module, function_name):

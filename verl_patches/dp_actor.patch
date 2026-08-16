@@ -1,0 +1,22 @@
+diff --git a/verl/workers/actor/dp_actor.py b/verl/workers/actor/dp_actor.py
+index 84741ae..6ae0bcd 100644
+--- a/verl/workers/actor/dp_actor.py
++++ b/verl/workers/actor/dp_actor.py
+@@ -21,6 +21,7 @@ import logging
+ import os
+ 
+ import torch
++import gc
+ from torch import nn
+ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+ 
+@@ -295,6 +296,9 @@ class DataParallelPPOActor(BasePPOActor):
+             self.actor_optimizer.zero_grad()
+         else:
+             self.actor_optimizer.step()
++        # Free cached GPU memory to reduce fragmentation
++        torch.cuda.empty_cache()
++        gc.collect()
+         return grad_norm
+ 
+     @GPUMemoryLogger(role="dp actor", logger=logger)

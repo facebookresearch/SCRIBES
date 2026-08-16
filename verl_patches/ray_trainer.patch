@@ -1,0 +1,165 @@
+diff --git a/verl/trainer/ppo/ray_trainer.py b/verl/trainer/ppo/ray_trainer.py
+index 6a82a4b..72a94aa 100644
+--- a/verl/trainer/ppo/ray_trainer.py
++++ b/verl/trainer/ppo/ray_trainer.py
+@@ -531,7 +531,7 @@ class RayPPOTrainer:
+             dataset=self.train_dataset,
+             batch_size=self.config.data.get("gen_batch_size", self.config.data.train_batch_size),
+             num_workers=num_workers,
+-            drop_last=True,
++            drop_last=False,
+             collate_fn=collate_fn,
+             sampler=train_sampler,
+         )
+@@ -1129,6 +1129,20 @@ class RayPPOTrainer:
+                                 gen_baseline_output = self.actor_rollout_wg.generate_sequences(gen_baseline_batch)
+                             else:
+                                 gen_baseline_output = self.async_rollout_manager.generate_sequences(gen_baseline_batch)
++                            # Align before union
++                            try:
++                                curr_bs = batch.batch.batch_size[0]
++                                ret_bs = gen_baseline_output.batch.batch_size[0]
++                            except Exception:
++                                curr_bs = len(batch.batch)
++                                ret_bs = len(gen_baseline_output.batch)
++                            if curr_bs != ret_bs:
++                                min_bs = min(curr_bs, ret_bs)
++                                print(
++                                    f"WARN: gen_baseline_output batch mismatch {ret_bs} vs {curr_bs}, slicing both to {min_bs} before union"
++                                )
++                                batch = batch[:min_bs]
++                                gen_baseline_output = gen_baseline_output[:min_bs]
+                             batch = batch.union(gen_baseline_output)
+                             reward_baseline_tensor = self.reward_fn(batch)
+                             reward_baseline_tensor = reward_baseline_tensor.sum(dim=-1)
+@@ -1144,6 +1158,20 @@ class RayPPOTrainer:
+                     )
+                     # repeat to align with repeated responses in rollout
+                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
++                    # Align before union
++                    try:
++                        curr_bs = batch.batch.batch_size[0]
++                        ret_bs = gen_batch_output.batch.batch_size[0]
++                    except Exception:
++                        curr_bs = len(batch.batch)
++                        ret_bs = len(gen_batch_output.batch)
++                    if curr_bs != ret_bs:
++                        min_bs = min(curr_bs, ret_bs)
++                        print(
++                            f"WARN: gen_batch_output batch mismatch {ret_bs} vs {curr_bs}, slicing both to {min_bs} before union"
++                        )
++                        batch = batch[:min_bs]
++                        gen_batch_output = gen_batch_output[:min_bs]
+                     batch = batch.union(gen_batch_output)
+ 
+                     if "response_mask" not in batch.batch.keys():
+@@ -1163,6 +1191,20 @@ class RayPPOTrainer:
+                         # compute reward model score
+                         if self.use_rm:
+                             reward_tensor = self.rm_wg.compute_rm_score(batch)
++                            # Align before union
++                            try:
++                                curr_bs = batch.batch.batch_size[0]
++                                ret_bs = reward_tensor.batch.batch_size[0]
++                            except Exception:
++                                curr_bs = len(batch.batch)
++                                ret_bs = len(reward_tensor.batch)
++                            if curr_bs != ret_bs:
++                                min_bs = min(curr_bs, ret_bs)
++                                print(
++                                    f"WARN: reward_tensor batch mismatch {ret_bs} vs {curr_bs}, slicing both to {min_bs} before union"
++                                )
++                                batch = batch[:min_bs]
++                                reward_tensor = reward_tensor[:min_bs]
+                             batch = batch.union(reward_tensor)
+ 
+                         if self.config.reward_model.launch_reward_fn_async:
+@@ -1176,10 +1218,46 @@ class RayPPOTrainer:
+                         entropys = old_log_prob.batch["entropys"]
+                         response_masks = batch.batch["response_mask"]
+                         loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
+-                        entropy_agg = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
++                        # Align shapes defensively in case distributed recompute pads batches
++                        if entropys.shape != response_masks.shape:
++                            if (
++                                entropys.dim() == 2
++                                and response_masks.dim() == 2
++                                and entropys.shape[1] == response_masks.shape[1]
++                            ):
++                                min_bs = min(entropys.shape[0], response_masks.shape[0])
++                                if entropys.shape[0] != min_bs:
++                                    entropys = entropys[:min_bs]
++                                if response_masks.shape[0] != min_bs:
++                                    response_masks = response_masks[:min_bs]
++                                print(
++                                    f"WARN: entropy/mask batch mismatch {entropys.shape} vs {response_masks.shape}, slicing to {min_bs} rows"
++                                )
++                            else:
++                                raise RuntimeError(
++                                    f"Shape mismatch when aggregating entropy: entropys={tuple(entropys.shape)} vs response_masks={tuple(response_masks.shape)}"
++                                )
++                        entropy_agg = agg_loss(
++                            loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode
++                        )
+                         old_log_prob_metrics = {"actor/entropy": entropy_agg.detach().item()}
+                         metrics.update(old_log_prob_metrics)
+                         old_log_prob.batch.pop("entropys")
++                        # Ensure old_log_prob tensors have the same batch size as current batch before union
++                        try:
++                            curr_bs = batch.batch.batch_size[0]
++                            ret_bs = old_log_prob.batch.batch_size[0]
++                        except Exception:
++                            curr_bs = len(batch.batch)
++                            ret_bs = len(old_log_prob.batch)
++                        if curr_bs != ret_bs:
++                            min_bs = min(curr_bs, ret_bs)
++                            print(
++                                f"WARN: old_log_prob batch mismatch {ret_bs} vs {curr_bs}, slicing both to {min_bs} before union"
++                            )
++                            # Slice both DataProto objects to keep tensors and non-tensors aligned
++                            batch = batch[:min_bs]
++                            old_log_prob = old_log_prob[:min_bs]
+                         batch = batch.union(old_log_prob)
+ 
+                         if "rollout_log_probs" in batch.batch.keys():
+@@ -1213,12 +1291,40 @@ class RayPPOTrainer:
+                                 ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
+                             else:
+                                 ref_log_prob = self.actor_rollout_wg.compute_ref_log_prob(batch)
++                            # Align batch size with current batch before union
++                            try:
++                                curr_bs = batch.batch.batch_size[0]
++                                ret_bs = ref_log_prob.batch.batch_size[0]
++                            except Exception:
++                                curr_bs = len(batch.batch)
++                                ret_bs = len(ref_log_prob.batch)
++                            if curr_bs != ret_bs:
++                                min_bs = min(curr_bs, ret_bs)
++                                print(
++                                    f"WARN: ref_log_prob batch mismatch {ret_bs} vs {curr_bs}, slicing both to {min_bs} before union"
++                                )
++                                batch = batch[:min_bs]
++                                ref_log_prob = ref_log_prob[:min_bs]
+                             batch = batch.union(ref_log_prob)
+ 
+                     # compute values
+                     if self.use_critic:
+                         with marked_timer("values", timing_raw, color="cyan"):
+                             values = self.critic_wg.compute_values(batch)
++                            # Align before union
++                            try:
++                                curr_bs = batch.batch.batch_size[0]
++                                ret_bs = values.batch.batch_size[0]
++                            except Exception:
++                                curr_bs = len(batch.batch)
++                                ret_bs = len(values.batch)
++                            if curr_bs != ret_bs:
++                                min_bs = min(curr_bs, ret_bs)
++                                print(
++                                    f"WARN: values batch mismatch {ret_bs} vs {curr_bs}, slicing both to {min_bs} before union"
++                                )
++                                batch = batch[:min_bs]
++                                values = values[:min_bs]
+                             batch = batch.union(values)
+ 
+                     with marked_timer("adv", timing_raw, color="brown"):
